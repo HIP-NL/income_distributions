@@ -1,11 +1,12 @@
 
 mypar = function(...){
-    par(..., 
-        bty = "l", 
-        mar = c(4, 3, 2, 1), 
-        mgp = c(1.7, .5, 0), 
+    par(...,
+        bty = "l",
+        mar = c(4, 3, 2, 1),
+        mgp = c(1.7, .5, 0),
         tck=-.01,
-        font.main = 1)
+        font.main = 1
+    )
 }
 
 safe_paste0 <- function(...) {

@@ -10,7 +10,9 @@ source("./src/functions.R")
 tax_records_path = "~/data/hipnl-processed/"
 
 tax = fread(
-    file = file.path(tax_records_path, "tax_wpredictions_v631_2.0_moves_households.csv")
+    file = "~/data/hipnl-processed/tax_wpredictions_v631_2.2_hhid_fix.csv"
+    # file = "~/data/hipnl-processed/tax_wpredictions_v631_2.1_enschede1909.csv"
+    # file = file.path(tax_records_path, "tax_wpredictions_v631_2.0_moves_households.csv")
     # file = "~/data/hipnl-processed/tax_wpredictions_v631_2.0_moves_households.csv"
     # file = "~/data/hipnl-processed/tax_wpredictions_v631_1.12_maskedtaxes.csv"
     # file = "~/data/hipnl-processed/tax_wpredictions_v631_1.10_taxtyposfixes.csv"
@@ -54,9 +56,11 @@ tax[, minimum_income := fcase(
     ( !province %in% c("Drenthe", "Limburg") )  & dec == 1920, 500
 )]
 
+
 # impute predicted_incomes directly
 imputelist = list()
 lengthlist = list()
+goflist = list()
 i = "10722_1879"
 
 # suggestion: just drop missing income_predicted_cbn as these should be treated via refpop
@@ -67,11 +71,20 @@ tax[is.na(tax) & is.na(income_taxable) & is.na(income_gross), .N]
 tax = tax[!is.na(income_predicted_cbn)]
 
 # aggregate to households
+tax[, tax := sum(tax), by = global_hhid]
+tax[, income_taxable := sum(income_taxable), by = global_hhid]
+tax[, income_gross := sum(income_gross), by = global_hhid]
 tax[, income_predicted_cbn := sum(income_predicted_cbn), by = global_hhid]
 tax[, income_predicted_lin := sum(income_predicted_lin), by = global_hhid]
 tax[, income_predicted_xgb := sum(income_predicted_xgb), by = global_hhid]
 tax = tax[!duplicated(global_hhid)]
 
+tax[year_mun_id == "1909_Enschede"]
+
+# pop[amco == 10364, list(households, year)]
+i = "10364_1909"
+
+pdf("./fig/allimputations.pdf", width = 10, height = 5)
 set.seed(54123)
 unique_amco_years = unique(tax$amco_year)
 for (i in unique_amco_years){
@@ -104,7 +117,7 @@ for (i in unique_amco_years){
         print(quantile(tax_ss$income_predicted_xgb, 0.01, na.rm = TRUE))
 
         imputed_incomes_xgb = sample_from_lognormal(
-            tax_ss$income_predicted_xgb, 
+            y = tax_ss$income_predicted_xgb, 
             n_missing = refpop - nrow(tax_ss),
             min = minimum_income # 50
         )
@@ -140,6 +153,9 @@ for (i in unique_amco_years){
                 min = minimum_income # 50
             )                        
             imputed_incomes_cbn = imputed_incomes_cbn[-c(1:sum(!is.na(tax_ss$income_predicted_cbn)))]
+
+            gof_cbn = estimate_lnorm(y = toimpute, n_missing = refpop - nrow(tax_ss))$gof
+            goflist[[i]] = gof_cbn
         }
         # }
 
@@ -172,6 +188,8 @@ for (i in unique_amco_years){
         # )
     }
 }
+
+sapply(goflist, \(x) x$statistic) |> sqrt() |> hist()
 
 # warnings concern linear predictions, makes sense because sometimes tax is missing
 txi = rbindlist(lapply(imputelist, data.table), idcol = "amco_year2", fill = TRUE)
@@ -230,6 +248,31 @@ legend("topright", fill = 1:6,
     )
 )
 dev.off()
+
+# imputations
+pdf("./fig/allimputations.pdf")
+for (ay in txi[imputed == TRUE, unique(amco_year)]){
+    toplot = txi[amco_year == ay]
+    plt(~ log(income_predicted_cbn_1900) | imputed, data = toplot, type = "hist")
+    title(main = unique(toplot$year_mun_id), sub = sqrt(goflist[[ay]]$statistic))
+}
+dev.off()
+
+
+qqrmse = function(y, mean_log, sd_log){
+    probs = ppoints(length(y), a = 0.375) # Default Hirsch-Stedinger alpha adjustment
+    theoretical_cdf = plnorm(exp(y), meanlog = mean_log, sdlog = sd_log)
+    ecdf_distance = mean((probs - theoretical_cdf)^2)
+    return(ecdf_distance)
+}
+
+prms = lapply(goflist, \(x) list(params = x$distribution.parameters, y = x$data[!x$censored]))
+sapply(prms, \(x) qqrmse(y = x$y, mean_log = x$params["meanlog"], sd_log = x$params["sdlog"])) |> hist()
+# again just basically always the same
+
+lapply(prms, \(x) x$mean_log)
+prms[[1]]
+txi[amco_year %in% names(goflist), sum(!imputed), by = amco_year]
 
 # weird 1870 bump has a lin/xgb discrepancy
 txi[dec == 1870 & imputed == FALSE, 
@@ -642,7 +685,8 @@ out = out[year_mun_id != "1920_Wilnis"]    # fewer imputations, though toss-up 1
 out = out[year_mun_id != "1869_Bunnik"]    # has missing observation that's a problem in some contexts
 
 fwrite(out, 
-    file = "~/repos/hipnl/dat/hipnl_ineq_munic_631_2.1_new_primshares.csv" # moves removed and households aggregated
+    file = "~/repos/hipnl/dat/hipnl_ineq_munic_631_2.2__enschede_hhfix.csv" # moves removed and households aggregated
+    # file = "~/repos/hipnl/dat/hipnl_ineq_munic_631_2.1_new_primshares.csv" # moves removed and households aggregated
     # file = "~/repos/hipnl/dat/hipnl_ineq_munic_631_2.0_moves_households.csv" # moves removed and households aggregated
     # file = "~/repos/hipnl/dat/hipnl_ineq_munic_631_1.14_agri.csv" # fixes agri
     # file = "~/repos/hipnl/dat/hipnl_ineq_munic_631_1.13_refpop_full.csv" # occups, refpops, imputation lower bound
@@ -696,7 +740,8 @@ txi = merge(
 dim(txi)
 fwrite(
     x = txi, 
-    file = "~/repos/hipnl/dat/hipnl_imputed_631_2.1_new_primshares.csv.gz", # moves removed and households aggregated
+    file = "~/repos/hipnl/dat/hipnl_imputed_631_2.2_enschede_hhfix.csv.gz", # moves removed and households aggregated
+    # file = "~/repos/hipnl/dat/hipnl_imputed_631_2.1_new_primshares.csv.gz", # moves removed and households aggregated
     # file = "~/repos/hipnl/dat/hipnl_imputed_631_2.0_moves_households.csv", # moves removed and households aggregated
     # file = "~/repos/hipnl/dat/hipnl_imputed_631_1.14_agri.csv", # agri occs fixes
     # file = "~/repos/hipnl/dat/hipnl_imputed_631_1.13_refpop_full.csv",
@@ -707,7 +752,17 @@ fwrite(
     bom = TRUE
 )
 
-txi[!is.na(income_predicted_cbn_1900), ineq::Gini(income_predicted_cbn_1900), by = year_mun_id]
+txi[!is.na(income_predicted_cbn_1900), ineq::Gini(income_predicted_cbn_1900), by = dec][order(dec)] |> knitr::kable(digits = 2)
+txi[!is.na(income_predicted_cbn_1900), top_income_share(income_predicted_cbn_1900, 0.1), by = dec][order(dec)] |> knitr::kable(digits = 2)
+txi[!is.na(income_predicted_cbn_1900), top_income_share(income_predicted_cbn_1900, 0.01), by = dec][order(dec)] |> knitr::kable(digits = 2)
+
+txi[!is.na(income_predicted_cbn_1900), ineq::Gini(income_predicted_cbn_1900), by = year_mun_id][order(-V1)]
+
+q = 0:10 / 10
+toplot = txi[, list(q, quantile(log(income_predicted_cbn_1900), q)), by = list(municipality, dec)]
+plt(V2 ~ dec | municipality + q, data = toplot[municipality == "Enschede"], type = "b")
+
+txi[municipality == "Enschede", mean(imputed), by = dec][order(dec)]
 
 plt(~log(income_predicted_cbn_1900) | dec, data = txi[between(dec, 1890, 1910)], type = "density", bw = 0.15)
 

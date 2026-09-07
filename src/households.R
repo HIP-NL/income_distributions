@@ -69,7 +69,17 @@ if (do_cross_sheet_duplicates){
 # 3. FIND BLOCKS THAT ARE NOT SAFE TO IDENTIFY
 # ------------------------------------------------------------------------------
 
+# we exclude tax registers that are both alphabetical and have relatively little address information
+
+# should this include tax sorted ones? No, because shift is for surnames. Otherwise we use address and this is still safe
+
+
+
 setorder(tax, row)
+
+tax[, all(tax >= shift(tax), na.rm = TRUE), by = year_mun_id][, .N, by = V1]
+tax[, all(tax <= shift(tax), na.rm = TRUE), by = year_mun_id][, .N, by = V1]
+
 
 # ignore suppletoir which has a different logic
 tax[, share_alphabetical := calc_share_alphabetical(stringi::stri_sub(unique(tolower(surname[suppletoir == FALSE])), 1, 2)), by = list(year_mun_id)]
@@ -82,13 +92,11 @@ not_alpha_munics = readLines("./dat/not_alpha_year_mun_id.txt") # confirmed not 
 alpha_munics = readLines("./dat/alpha_year_mun_id.txt") # confirmed not alphabetical
 tax[, alphabetical_register := year_mun_id %in% alpha_munics]
 
+# address informativeness
 tax[, synthaddress := safe_paste0(year_mun_id, place, street, house_nr_street, wijk, house_nr_wijk), by = year_mun_id]
 tax[, ttr_address := uniqueN(synthaddress[suppletoir == FALSE]) / sum(suppletoir == FALSE), by = year_mun_id]
 
-tax[, no_household_inference := alphabetical_register & (ttr_address < 0.6)]
-
-
-
+tax[, no_household_inference := (alphabetical_register & (ttr_address < 0.3) )| year_mun_id == "1909_Enschede"]
 
 # ------------------------------------------------------------------------------
 # 6. HOUSEHOLD IDENTIFICATION
@@ -113,3 +121,5 @@ tax[, hhid2 := paste0(hhid, "-", rleid(safe_paste0(street, house_nr_street, wijk
 # Set a global household ID across municipalities if needed, from hhid2
 tax[, global_hhid := paste0(year_mun_id, "_", hhid2)]
 
+# reset global hhid to 1:.N if no_household_inference is true
+tax[no_household_inference == TRUE, global_hhid := paste0(year_mun_id, "_", 1:.N), by = year_mun_id]

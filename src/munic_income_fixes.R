@@ -440,6 +440,8 @@ tax[year_mun_id == "1870_Edam", income_gross := mid] # all a bit low (250), but 
 tax[year_mun_id == "1870_Edam", mid := NA] # all a bit low (250), but deductions happen on tax paid, not pre-tax income
 
 tax[municipality == "Edam" & year == 1879, deductions := NA] # deduction is on tax, not income, so drop
+tax[year_mun_id == "1879_Edam" & volgnummer == 325, class := 21] # mistaken 
+tax[year_mun_id == "1879_Edam" & volgnummer == 325, mid := 500]
 tax[year_mun_id == "1879_Edam", income_gross := mid] # all a bit low (250), but deductions happen on tax paid, not pre-tax income
 tax[year_mun_id == "1879_Edam", mid := NA] # all a bit low (250), but deductions happen on tax paid, not pre-tax income
 # tax[municipality == "Edam" & year == 1879, ..inspvrbs] # deduction is on tax, not income
@@ -717,8 +719,22 @@ tax[municipality== "het Bildt" & year == 1920 & income_gross == 3, income_gross 
 # tax[year_mun_id == "1899_Enschede", ..inspvrbs][order(income_gross)]
 # enschede tax amounts mistaken
 tax[year_mun_id == "1899_Enschede" & income_gross == 450, tax := 2.74]
+
+
+# tax[year_mun_id == "1909_Enschede", ..inspvrbs][order(income_taxable)]
+
+# income clearly is income taxable, in 1919 we find  average deduction
+# (varied) 575 from the kohieren. 450-700 is the range. In 1899 the actual
+# incomes are reported even if they are called belastbaar. Lowest is 400-500.
+# In 1916 in lonneker, it was 350 (thought to be insufficient at that point),
+# but this is not enschede. But probably a minimum. I'd say they're deducting
+# 400 in 1899 probably, so more than that as well.
+
+# should be 450 https://resolver.kb.nl/resolve?urn=MMSAEN01:000041046:mpeg21:a0002
+tax[year_mun_id == "1909_Enschede", income_gross := income_taxable + 200] # 400 as conservative estimate, maybe should be a lower number + child deducitons
+
 # tax[year_mun_id == "1919_Enschede", ..inspvrbs][order(income_gross)]
-tax[year_mun_id == "1919_Enschede", mid := NA] # mid is taxable, drop
+tax[year_mun_id == "1919_Enschede", mid := NA] # mid is taxable, drop. Rest already fixed in enschede1919.R
 
 tax[year_mun_id == "1870_Utrecht", ..inspvrbs][order(income_taxable)] # taxable, that rijksopscenten mess
 tax[year_mun_id == "1870_Utrecht", .N, by = round(income_taxable, -1)] # taxable, that rijksopscenten mess

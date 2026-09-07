@@ -26,15 +26,23 @@ data.table::setDT(tax)
 data.table::setDT(sch)
 data.table::setDT(met)
 
-persvars = c("year_mun_id", "volgnummer", "firstnames", "initials", "surname", "street", 
+persvars = c("year_mun_id", "volgnummer", "firstnames", "initials", "surname", "street",
     "house_nr_street", "wijk", "house_nr_wijk", "moved_address", "record_guid")
 
 taxvrbs = c("income_taxable", "income_gross", "income_unspecified", "income_raad",
-    "tax", "tax2", 
+    "tax", "tax2",
     # "mid",
     "class"
 )
 inspvrbs = c("months", "deductions", "taxrate", "mid", taxvrbs)
+
+# ADD ENSCHEDE 1909
+# this is currently incomes only, so insert here rather than full integration in db
+ens1909 = fread("~/data/hipnl/overijssel/enschede/1909/enschede_1909.csv")
+ens1909[, municipality := "Enschede"]
+ens1909[, amco := 10364]
+
+tax = rbindlist(list(tax, ens1909), fill = TRUE)
 
 
 # row counter to keep order intact
@@ -46,8 +54,6 @@ tax[, dec := round(year, -1)]
 # hard name duplicates within year_mun_id (records)
 tax[, dupl := duplicated(paste(firstnames, initials, surname)), by = year_mun_id]
 
-
-
 # empty children 0 where appropriate
 mun_with_children_reported = tax[, mean(!is.na(n_children)), by = year_mun_id][order(V1)][V1 > 0.25, year_mun_id]
 tax[year_mun_id %in% mun_with_children_reported & is.na(n_children), n_children := 0]
@@ -55,9 +61,9 @@ tax[!year_mun_id %in% mun_with_children_reported, n_children := NA]
 
 
 
-# -------------------------------- 
+# --------------------------------
 # clean and merge in tax schedules
-# -------------------------------- 
+# --------------------------------
 
 # only min, no max, fix
 sch[municipality == "Hulst"         & year == 1879, min := max]
@@ -169,6 +175,7 @@ dim(tax)
 # --------------------------------------------------------
 tax[income_taxable > 0, taxrate := tax / income_taxable]
 
+# nb we drop some faulty rows (empty but some columns mistakenly filled in)
 dim(tax)
 source("./src/munic_income_fixes.R")
 dim(tax)
@@ -179,7 +186,7 @@ dim(tax)
 
 tax[income_taxable > 0, pct := tax / income_taxable]
 tax[order(-income_taxable), list(year_mun_id, income_taxable, tax, taxrate)]
-tax[order(-pct), list(year_mun_id, income_taxable, tax, pct)][1:20]
+tax[order(-pct), list(year_mun_id, income_taxable, tax, pct)][1:5]
 # so clearly more fixing to be done...
 
 plot(tax ~ income_taxable, data = tax, log = "xy")
@@ -268,14 +275,14 @@ tax[!is.na(correct), income_gross := income_gross + correct]
 tax[!is.na(correct), .N]
 tax[, uniqueN(year_mun_id), by = !is.na(correct)]
 
-# 41 corrections, 
+# 41 corrections,
 # TODO: CHECK THEM one by one
 tax[, correct := NULL]
 
 
 # we still have 25-100 observations which are low
-tax[income_gross < 200]
-tax[income_gross < 250]
+tax[income_gross < 200, .N, by = year_mun_id]
+tax[income_gross < 250, .N, by = year_mun_id]
 # but these are typically in munics with a solid q10 or q05
 tax[!is.na(income_gross), list(min(income_gross), quantile(income_gross, 0.05), quantile(income_gross, 0.1)), by = year_mun_id][
     V1 < 200]
@@ -341,13 +348,13 @@ tax[, train := rbinom(.N, 1, prob = share_train), by = year_mun_id]
 # trn = tax[train == 1 & income_taxable >= 0 & income_gross >= 0, .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 # vld = tax[train == 0 & income_taxable >= 0 & income_gross >= 0, .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 # no waalwijk data
-tax[municipality == "Waalwijk"]
 tax[, waalwijk := as.integer(a11359)]
 
 # no waalwijk, no enschede
 # trn = tax[train == 1 & income_taxable >= 0 & income_gross >= 0 & municipality != "Waalwijk" & year_mun_id != "1919_Enschede", .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 # vld = tax[train == 0 & income_taxable >= 0 & income_gross >= 0 & municipality != "Waalwijk" & year_mun_id != "1919_Enschede", .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 
+# drop lmid?
 # ptrn = "linc|ltax|lmid|n_children$|top|dprov|y\\d+|urb|q10tax"
 ptrn = "linc|lmid|n_children$|top|dprov|y\\d+|urb|q10tax|n_in_household"
 
@@ -389,7 +396,7 @@ m = xgboost::xgb.train(
         # colsample_bytree = 0.5, # default 1
         objective = "reg:squarederror"
 ))
-# used to be [500]   train-rmse:0.054416 eval-rmse:0.073647 
+# used to be [500]   train-rmse:0.054416 eval-rmse:0.073647
 # no mun or prov 0.098183
 # with prov 0.098183
 # with prov urb 0.095883
@@ -401,6 +408,7 @@ m = xgboost::xgb.train(
 # with tax mistakes fixed, 0.074
 # not using tax: 0.078 (so actually we want to fix all taxes but here we are)
 # not using tax and n_in_household: 0.077
+# add enschede 1909: 0.075
 
 xgb.importance(model = m)
 
@@ -429,7 +437,7 @@ predictions = data.table(
 # trn = modmat[train == 1 & income_taxable >= 0 & income_gross >= 0 & municipality != "Waalwijk" & year_mun_id != "1919_Enschede", .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 # vld = modmat[train == 0 & income_taxable >= 0 & income_gross >= 0 & municipality != "Waalwijk" & year_mun_id != "1919_Enschede", .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 
-# drop tax is NA, adds a lot of noise, this is enschede 1919, 
+# drop tax is NA, adds a lot of noise, this is enschede 1919,
 # trn = modmat[train == 1 & income_taxable >= 0 & income_gross >= 0 & tax >= 0, .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 # vld = modmat[train == 0 & income_taxable >= 0 & income_gross >= 0 & tax >= 0, .SD, .SDcols = patterns("linc|ltax|lmid|n_children$|top|a\\d+|y\\d+")]
 
@@ -467,15 +475,16 @@ m_tax = xgboost::xgb.train(
 ))
 
 
-# [500]   train-rmse:0.098483 eval-rmse:0.125739 
+# [500]   train-rmse:0.098483 eval-rmse:0.125739
 # 0.129065
 # 0.128 with actual prov
-# 0.124 with some data fixes 
+# 0.124 with some data fixes
 # 0.1205 with amersfoort
 # 0.1150 with tax mistakes fixed
 # bunch of tax fixes, 0.105
 # bunch of tax fixes, 0.107 after new round
 # bunch of tax fixes, 0.1069 n_in_household
+# somehow 1062 after enschede even though there are no taxes in there
 
 predictions_tax = data.table(
     vld,
@@ -486,11 +495,14 @@ predictions_tax = data.table(
 # reasonable min value (q10?) for province x decade
 # linear model income_gross ~ tax + i(year) + i(prov) + etc. to get hard taxes
 
+# could have n_in_household?
+
 library("fixest")
 trn = tax[lincome_gross > 0 & tax > 0 & train == 1 & high_taxrate == FALSE, list(lincome_gross, ltax, dec, nhh, urban, q10tax, province)]
 vld = tax[lincome_gross > 0 & tax > 0 & train == 0 & high_taxrate == FALSE, list(lincome_gross, ltax, dec, nhh, urban, q10tax, province)]
 m1 = feols(lincome_gross ~ ltax + i(dec) + i(province) + urban + q10tax, data = trn)
 etable(m1)
+mean(sqrt(resid(m1)^2)) # 0.22
 
 # ok so what's basically happening is that the all the deductions at the lower
 # end of the range are pulling the slope and intercept down a lot, so much so
@@ -520,7 +532,7 @@ predictions_lm[, sqrt(mean((predicted - actual)^2))] # considerably worse than x
 # tax[year_mun_id == "1919_Enschede"]
 tax[, noinc := is.na(income_gross) & is.na(income_taxable) & is.na(tax)]
 tax[, list(sum(noinc), mean(noinc), .N), by = year_mun_id][order(V2)]
-# q though is: what do you do with these? 
+# q though is: what do you do with these?
 # drop them and then impute? seems best
 
 totab = xgboost::xgb.importance(model = m)
@@ -532,21 +544,21 @@ etable(m1, digits = 3)
 pdf("./fig/income_harmonisation_63.pdf", height = 5, width = 10)
 par(mfrow = c(1, 3))
 plot(predicted ~ actual,
-    data = predictions, col = 2, pch = 19, 
+    data = predictions, col = 2, pch = 19,
     main = "xgb w. taxable incomes",
-    xlab = "actual gross income (fl.)", 
+    xlab = "actual gross income (fl.)",
     ylab = "predicted gross income (fl.)")
 curve(1*x, add = TRUE)
 plot(predicted ~ actual,
-    predictions_tax, col = 2, pch = 19, 
+    predictions_tax, col = 2, pch = 19,
     main = "xgb w/o taxable incomes",
-    xlab = "actual gross income (fl.)", 
+    xlab = "actual gross income (fl.)",
     ylab = "predicted gross income (fl.)")
 curve(1*x, add = TRUE)
 plot(predicted ~ actual,
-    predictions_lm, col = 2, pch = 19, 
+    predictions_lm, col = 2, pch = 19,
     main = "linear w/o taxable incomes",
-    xlab = "actual gross income (fl.)", 
+    xlab = "actual gross income (fl.)",
     ylab = "predicted gross income (fl.)")
 curve(1*x, add = TRUE)
 dev.off()
@@ -554,7 +566,7 @@ dev.off()
 # insert predictions into tax records and track source
 tax[!is.na(income_taxable), income_predicted_xgb := exp(predict(m, newdata = xgboost::xgb.DMatrix(as.matrix(.SD)))), .SDcols = m$feature_names]
 tax[!is.na(income_taxable), source := "xgb income model"]
-### ! ### aren't there more relevant classes here 
+### ! ### aren't there more relevant classes here
 
 tax[is.na(income_taxable), income_predicted_xgb := exp(predict(m_tax, newdata = xgboost::xgb.DMatrix(as.matrix(.SD)))), .SDcols = m_tax$feature_names]
 tax[is.na(income_taxable), source := "xgb tax only model"]
@@ -564,16 +576,20 @@ tax[is.na(income_taxable), source_lin := "lm tax only model"]
 # original gross estimate if we have it
 tax[, income_predicted_xgb := ifelse(is.na(income_gross), income_predicted_xgb, income_gross)]
 tax[, income_predicted_lin := ifelse(is.na(income_gross), income_predicted_lin, income_gross)]
+
+# tax[year_mun_id == "1917_Eindhoven" & volgnummer == 23, list(income_gross, income_predicted_xgb, income_predicted_lin)]
 tax[, income_predicted_cbn := fcase(
     !is.na(income_gross), income_gross,
     !is.na(income_taxable) & is.na(income_gross), income_predicted_xgb,
     is.na(income_taxable) & is.na(income_gross), income_predicted_lin,
     default = income_predicted_lin
 )]
+# tax[year_mun_id == "1917_Eindhoven" & volgnummer == 23, list(income_gross, income_predicted_cbn, income_predicted_xgb, income_predicted_lin)]
+tax[income_predicted_cbn == 2700 & income_gross == 600]
 tax[!is.na(income_gross), source := "original data"]
 tax[!is.na(income_gross), source_lin := "original data"]
 
-# lin and xgb disagreements 
+# lin and xgb disagreements
 # lot of 1879 utrecht which is that weird rijksopcenten thing
 tax[income_predicted_lin < 30e3 & income_predicted_xgb > 60e3, list(year_mun_id, sheet_name, wijk, volgnummer, income_predicted_lin, income_predicted_xgb, income_taxable, tax)]
 
@@ -594,8 +610,10 @@ tax[income_taxable < 1e3 & (income_taxable + 1000) < income_predicted_xgb & dec 
 # TODO: Here gross and taxable do not make sense, check and fix
 tax[income_taxable > income_gross & income_taxable > 1e4, list(year_mun_id, dec, income_taxable, income_gross, income_gross - income_taxable)]
 
-fwrite(tax, 
-    file = "~/data/hipnl-processed/tax_wpredictions_v631_2.0_moves_households.csv"
+fwrite(tax,
+    file = "~/data/hipnl-processed/tax_wpredictions_v631_2.2_hhid_fix.csv"
+    # file = "~/data/hipnl-processed/tax_wpredictions_v631_2.1_enschede1909.csv"
+    # file = "~/data/hipnl-processed/tax_wpredictions_v631_2.0_moves_households.csv"
     # file = "~/data/hipnl-processed/tax_wpredictions_v631_1.12_maskedtaxes.csv"
     # file = "~/data/hipnl-processed/tax_wpredictions_v631_1.10_taxtyposfixes.csv"
     # file = "~/data/hipnl-processed/tax_wpredictions_v631_1.9_waalwijkfix.csv"
